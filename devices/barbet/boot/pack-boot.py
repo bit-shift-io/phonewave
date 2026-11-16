@@ -251,9 +251,9 @@ def parse_avb(data):
     die("the template has no AVB hash descriptor for the boot partition")
 
 
-def make_payload(template, kernel, ramdisk, work):
-    dtb = work / "template.dtb"
-    dtb.write_bytes(template["dtb"])
+def make_payload(template, kernel, ramdisk, dtb_data, work):
+    dtb = work / "boot.dtb"
+    dtb.write_bytes(dtb_data)
     payload = work / "payload.img"
     argv = [
         "mkbootimg",
@@ -311,6 +311,8 @@ def main():
     parser.add_argument("ramdisk", type=Path)
     parser.add_argument("output", type=Path)
     parser.add_argument("evidence", type=Path, nargs="?")
+    parser.add_argument("--dtb", type=Path,
+                        help="device tree to pack instead of the template's")
     args = parser.parse_args()
 
     if args.output.exists():
@@ -322,17 +324,23 @@ def main():
         die(f"{args.image}: empty")
     if not args.ramdisk.stat().st_size:
         die(f"{args.ramdisk}: empty")
+    if args.dtb:
+        if not args.dtb.is_file():
+            die(f"{args.dtb}: missing")
+        if args.dtb.read_bytes()[:4] != b"\xd0\x0d\xfe\xed":
+            die(f"{args.dtb}: not an FDT")
 
     template = parse_template(args.template)
     avb = parse_avb(template["data"])
     partition_size = len(template["data"])
+    dtb = args.dtb.read_bytes() if args.dtb else template["dtb"]
     frame, image_text_offset = prepare_kernel(args.image, template)
 
     # mkbootimg and avbtool add a page-aligned DTB after the ramdisk; the AVB
     # footer and its 512-byte vbmeta blob cannot overlap the payload.
     payload_size = (PAGE + align(len(frame)) +
                     align(args.ramdisk.stat().st_size) +
-                    align(len(template["dtb"])))
+                    align(len(dtb)))
     if payload_size + AVB_FOOTER_SIZE + 512 > partition_size:
         die(f"{args.image}: kernel does not fit with the ramdisk and DTB "
             f"in {partition_size} bytes")
@@ -342,7 +350,7 @@ def main():
     try:
         kernel = work / "kernel.lz4"
         kernel.write_bytes(frame)
-        payload = make_payload(template, kernel, args.ramdisk, work)
+        payload = make_payload(template, kernel, args.ramdisk, dtb, work)
         add_footer(payload, avb, partition_size)
         try:
             os.link(payload, args.output)
@@ -365,8 +373,8 @@ def main():
         "kernel_payload": {"sha256": hashlib.sha256(frame).hexdigest(),
                            "bytes": len(frame)},
         "ramdisk": {"sha256": sha(args.ramdisk), "bytes": args.ramdisk.stat().st_size},
-        "dtb": {"sha256": hashlib.sha256(template["dtb"]).hexdigest(),
-                "bytes": len(template["dtb"])},
+        "dtb": {"sha256": hashlib.sha256(dtb).hexdigest(), "bytes": len(dtb),
+                "source": "supplied" if args.dtb else "template"},
         "output": {"sha256": sha(args.output), "bytes": args.output.stat().st_size},
         "header": {
             "header_version": 2,

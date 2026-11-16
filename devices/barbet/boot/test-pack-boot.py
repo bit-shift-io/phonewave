@@ -161,7 +161,7 @@ class PackBootTest(unittest.TestCase):
             make_template(self.tmp)
 
     def pack(self, template=None, image=None, ramdisk=None, output=None,
-             evidence=None, env=None):
+             evidence=None, dtb=None, env=None):
         template = template or self.template
         image = image or self.tmp / "Image"
         ramdisk = ramdisk or self.tmp / "ramdisk"
@@ -173,6 +173,8 @@ class PackBootTest(unittest.TestCase):
         argv = [str(PACKER), str(template), str(image), str(ramdisk), str(output)]
         if evidence:
             argv.append(str(evidence))
+        if dtb:
+            argv += ["--dtb", str(dtb)]
         return run(argv, env=env)
 
     def test_packs_the_compressed_kernel_over_the_template_payload(self):
@@ -225,6 +227,30 @@ class PackBootTest(unittest.TestCase):
         self.assertEqual(record["avb"]["original_size"], expected_payload)
         self.assertEqual(record["ramdisk"]["sha256"], sha(self.tmp / "ramdisk"))
         self.assertEqual(record["template"]["sha256"], sha(self.template))
+
+    def test_packs_a_supplied_dtb_instead_of_the_template_one(self):
+        dtb = b"\xd0\x0d\xfe\xed" + os.urandom(PAGE - 4)
+        supplied = self.tmp / "our.dtb"
+        supplied.write_bytes(dtb)
+        evidence = self.tmp / "evidence.json"
+        result = self.pack(dtb=supplied, evidence=evidence)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        output = self.tmp / "boot.img"
+        extracted = self.tmp / "unpacked"
+        unpack(output, extracted)
+        self.assertEqual((extracted / "dtb").read_bytes(), dtb)
+        self.assertEqual(int.from_bytes(output.read_bytes()[1648:1652], "little"), len(dtb))
+        record = json.loads(evidence.read_text())
+        self.assertEqual(record["dtb"]["sha256"], hashlib.sha256(dtb).hexdigest())
+        self.assertEqual(record["dtb"]["source"], "supplied")
+
+    def test_rejects_a_supplied_file_that_is_not_a_dtb(self):
+        supplied = self.tmp / "not.dtb"
+        supplied.write_bytes(b"not a device tree" * PAGE)
+        result = self.pack(dtb=supplied)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("FDT", result.stderr)
+        self.assertFalse((self.tmp / "boot.img").exists())
 
     def test_rejects_a_template_without_the_android_magic(self):
         template = self.tmp / "not-boot.img"
