@@ -48,7 +48,7 @@ if [ -c /dev/watchdog ]; then
 		done
 	) &
 fi
-mkdir -p /dev/pts /sys/kernel/config /sys/fs/pstore
+mkdir -p /dev/pts /sys/kernel/config /sys/fs/pstore /newroot
 mount -t tmpfs -o mode=0755 tmpfs /run
 mount -t configfs configfs /sys/kernel/config
 exec </dev/null >>/dev/kmsg 2>&1
