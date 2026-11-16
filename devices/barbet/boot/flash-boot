@@ -1,0 +1,52 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+#
+# Flash a verified boot image to boot_b from the running system, then reboot.
+# Run it in the boot userspace where the USB network is up.
+#
+# Usage: flash-boot URL SHA256
+set -eu
+
+url=${1:?url}
+want=${2:?sha256}
+image=/tmp/boot.img
+
+wget -O "$image" "$url"
+
+got=$(sha256sum "$image" | cut -d' ' -f1)
+[ "$got" = "$want" ] || {
+	echo "flash-boot: downloaded hash $got, expected $want" >&2
+	exit 1
+}
+
+# Find boot_b by its GPT partition name; never guess a partition.
+part=
+for uevent in /sys/class/block/*/uevent; do
+	if grep -q '^PARTNAME=boot_b$' "$uevent"; then
+		part=/dev/$(basename "$(dirname "$uevent")")
+		break
+	fi
+done
+[ -n "$part" ] || {
+	echo "flash-boot: no partition named boot_b" >&2
+	exit 1
+}
+
+sectors=$(cat "/sys/class/block/$(basename "$part")/size")
+[ "$sectors" = 196608 ] || {
+	echo "flash-boot: $part has $sectors sectors, expected 196608" >&2
+	exit 1
+}
+
+echo "flash-boot: writing $part"
+dd if="$image" of="$part" bs=1M conv=fsync
+sync
+
+got=$(dd if="$part" bs=1M | sha256sum | cut -d' ' -f1)
+[ "$got" = "$want" ] || {
+	echo "flash-boot: readback hash $got, expected $want" >&2
+	exit 1
+}
+
+echo "flash-boot: boot_b verified; rebooting"
+reboot -f

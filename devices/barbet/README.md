@@ -58,3 +58,27 @@ avbtool verify_image --image OUTPUT
 ```
 
 Host tests: `python3 devices/barbet/boot/test-pack-boot.py`.
+
+## Flashing from the boot userspace
+
+`flash-boot` writes `boot_b` from the running boot userspace, so a bad kernel
+does not cost a fastboot round trip. It downloads the image over the USB
+network, checks the SHA-256, finds `boot_b` by its GPT partition name, checks
+its size, writes it, verifies the readback and reboots. It never touches any
+other partition.
+
+On the workstation:
+
+```sh
+devices/barbet/boot/serve-boot.sh /path/to/boot.img
+```
+
+In the phone boot userspace (UART or SSH):
+
+```sh
+flash-boot http://172.16.42.2:8000/boot.img <sha256>
+```
+
+The USB network gives the workstation `172.16.42.2` and the phone
+`172.16.42.1`. The script must be present in the boot userspace; for the
+temporary Luma ramdisk it is installed under `/usr/bin`.
