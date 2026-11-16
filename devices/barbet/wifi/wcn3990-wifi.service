@@ -1,0 +1,13 @@
+[Unit]
+Description=Start the modem and WCN3990 Wi-Fi
+After=rmtfs.service tqftpserv.service
+Requires=tqftpserv.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+TimeoutStartSec=180
+ExecStart=/usr/local/bin/barbet-wifi-start
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,64 @@
+#!/bin/sh
+# Barbet WCN3990 bring-up. The WLAN firmware is booted by the modem, and the
+# modem only does that while the ADSP is not owning the WLAN subsystem. The
+# ADSP is needed for audio, so the order is: serve firmware over QRTR, stop
+# the ADSP, start the modem (WLAN boots and WLFW appears), then start the ADSP
+# for audio. This service runs before the audio one.
+#
+# Do not rebind ath10k here. Its QMI client must already exist when the modem
+# announces WLFW; a rebind after the modem is up re-probes the driver and the
+# firmware answers the host-capability request with QMI_ERR_INCOMPATIBLE_STATE
+# (90), which aborts the whole Wi-Fi start.
+set -eu
+
+systemctl start tqftpserv.service 2>/dev/null || true
+
+# tqftpserv must be visible over QRTR before the modem asks for firmware.
+i=0
+while ! qrtr-lookup 2>/dev/null | awk '$1 == 4096 { found = 1 } END { exit !found }'; do
+	i=$((i + 1))
+	[ "$i" -lt 100 ] || { echo "tqftpserv did not register over QRTR" >&2; exit 1; }
+	sleep 0.1
+done
+
+# The WLAN subsystem belongs to the modem while the ADSP is down.
+for r in /sys/class/remoteproc/remoteproc*; do
+	[ -e "$r/name" ] || continue
+	[ "$(cat "$r/name")" = adsp ] || continue
+	if [ "$(cat "$r/state")" = running ]; then
+		echo stop > "$r/state"
+		i=0
+		while [ "$(cat "$r/state")" != offline ]; do
+			i=$((i + 1))
+			[ "$i" -lt 100 ] || { echo "ADSP did not stop" >&2; exit 1; }
+			sleep 0.1
+		done
+	fi
+done
+
+for r in /sys/class/remoteproc/remoteproc*; do
+	[ -e "$r/name" ] || continue
+	[ "$(cat "$r/name")" = modem ] || continue
+	[ "$(cat "$r/state")" = running ] || echo start > "$r/state"
+done
+
+# wlan0 exists before the modem has finished booting the WLAN firmware. Wait
+# for WLFW (69) as well before returning, so a later audio start cannot race
+# the WLAN boot. Do not hold the boot forever when Wi-Fi fails: report it.
+i=0
+while [ ! -e /sys/class/net/wlan0 ] && [ "$i" -lt 1200 ]; do
+	i=$((i + 1))
+	sleep 0.1
+done
+if [ -e /sys/class/net/wlan0 ]; then
+	ip link set wlan0 up 2>/dev/null || true
+	i=0
+	while ! qrtr-lookup 2>/dev/null | awk '$1 == 69 { found = 1 } END { exit !found }'; do
+		i=$((i + 1))
+		[ "$i" -lt 200 ] || { echo "WLFW did not register" >&2; exit 1; }
+		sleep 0.1
+	done
+	echo "wlan0 ready; NetworkManager owns association"
+else
+	echo "wlan0 did not appear; check the WLAN firmware" >&2
+fi

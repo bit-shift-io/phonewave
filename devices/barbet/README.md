@@ -131,3 +131,12 @@ image. A rescue with no installed root answers at `10.77.71.2`; the
 workstation needs `10.77.71.1/30` on the phone's USB network interface.
 `devices/barbet/boot/build-boot.sh` installs `flash-root` beside
 `flash-boot`.
+
+## Wi-Fi
+
+The WCN3990 is behind the modem: the modem loads the WLAN firmware while the
+ADSP is offline, and `ath10k_snoc` attaches over QRTR. `devices/barbet/wifi/`
+holds the one-time `provision` script (modem, WLAN and board firmware from the
+phone's own stock partitions, the `rmtfs`/`tqftpserv` units and the start
+ordering) and the reason `ath10k` must not be rebound after the modem starts.
+See `devices/barbet/wifi/README.md`.

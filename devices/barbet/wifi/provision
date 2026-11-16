@@ -1,0 +1,121 @@
+#!/bin/sh
+# Install everything the Barbet Wi-Fi stack needs into the running system.
+# Run as root on the phone; idempotent. Reboot afterwards: the modem firmware
+# and the ordering only take effect on a fresh start.
+#
+# Sources, all the phone's own stock software:
+#   modem partition (vfat, image/): modem.mdt and modem.b*
+#   super's vendor_a (ext4 at VENDOR_IMG): firmware/wlanmdsp.mbn,
+#       firmware/bdwlan-barbet.bin
+# VENDOR_DIR may point at an already-mounted stock vendor tree instead of
+# VENDOR_IMG. There is no download: the AP and chip calibration must match the
+# phone's own modem build.
+set -eu
+
+FW_DIR=/usr/lib/firmware/qcom/sm7250/google/barbet
+ATH_DIR=/usr/lib/firmware/ath10k/WCN3990/hw1.0
+MODEM_PART=${MODEM_PART:-/dev/disk/by-partlabel/modem_a}
+VENDOR_IMG=${VENDOR_IMG:-/var/tmp/super/vendor_a.img}
+HERE=$(cd "$(dirname "$0")" && pwd)
+
+die() { echo "provision: $*" >&2; exit 1; }
+
+[ -x /usr/local/bin/tqftpserv ] ||
+	die "install tqftpserv as /usr/local/bin/tqftpserv (build it from the linux-msm/tqftpserv sources)"
+
+# The WLAN firmware and its calibration live in the vendor image inside super.
+vendor_dir=${VENDOR_DIR:-}
+mounted_vendor=
+if [ -z "$vendor_dir" ]; then
+	[ -f "$VENDOR_IMG" ] ||
+		die "no vendor firmware: set VENDOR_DIR, or VENDOR_IMG to a vendor_a.img (lpunpack -p vendor_a $VENDOR_IMG /dev/disk/by-partlabel/super)"
+	mkdir -p /run/barbet-vendor
+	if ! mountpoint -q /run/barbet-vendor; then
+		mount -t ext4 -o ro "$VENDOR_IMG" /run/barbet-vendor ||
+			die "cannot mount $VENDOR_IMG"
+		mounted_vendor=1
+	fi
+	vendor_dir=/run/barbet-vendor
+fi
+vf=$vendor_dir/firmware
+[ -s "$vf/wlanmdsp.mbn" ] || die "$vf/wlanmdsp.mbn is missing"
+[ -s "$vf/bdwlan-barbet.bin" ] || die "$vf/bdwlan-barbet.bin is missing"
+
+# The modem firmware is the fixed-up image from the phone's own slot. The
+# booted slot's copy is the one that matches this vendor image.
+mnt=$(mktemp -d)
+cleanup() {
+	umount "$mnt" 2>/dev/null || true
+	rmdir "$mnt" 2>/dev/null || true
+	[ -z "$mounted_vendor" ] || umount /run/barbet-vendor 2>/dev/null || true
+}
+trap cleanup EXIT
+mount -t vfat -o ro "$MODEM_PART" "$mnt" || die "cannot mount $MODEM_PART"
+[ -s "$mnt/image/modem.mdt" ] || die "$MODEM_PART lacks image/modem.mdt"
+
+install -d "$FW_DIR"
+install -m 644 "$mnt/image/modem.mdt" "$FW_DIR"/
+for f in "$mnt"/image/modem.b*; do
+	install -m 644 "$f" "$FW_DIR"/
+done
+umount "$mnt"
+
+# tqftpserv resolves every /readonly/... request in this remoteproc firmware
+# directory, so the WLAN firmware the modem asks for must sit here, not in a
+# mount of the vendor partition.
+install -m 644 "$vf/wlanmdsp.mbn" "$FW_DIR/wlanmdsp.mbn"
+install -m 644 "$vf/wlanmdsp.mbn" "$FW_DIR/wlanmdsp.otaupdate"
+install -m 644 "$vf/bdwlan-barbet.bin" "$FW_DIR/bdwlan.bin"
+
+# ath10k looks under firmware-name ("barbet") first and then in hw1.0. The
+# board name inside board-2.bin is the QMI fallback name; board.bin is the
+# same calibration for the API-1 path.
+install -d "$ATH_DIR/barbet"
+install -m 644 "$vf/bdwlan-barbet.bin" "$ATH_DIR/board.bin"
+install -m 644 "$vf/bdwlan-barbet.bin" "$ATH_DIR/barbet/board.bin"
+python3 - "$vf/bdwlan-barbet.bin" "$ATH_DIR/board-2.bin" <<'PY'
+import struct
+import sys
+
+src, out = sys.argv[1], sys.argv[2]
+data = open(src, "rb").read()
+
+
+def pad4(b):
+    return b + b"\0" * (-len(b) % 4)
+
+
+def ie(i, d):
+    return struct.pack("<II", i, len(d)) + pad4(d)
+
+
+blob = pad4(b"QCA-ATH10K-BOARD\0")
+name = b"bus=snoc,qmi-board-id=ff"
+blob += ie(0, ie(0, name) + ie(1, data))
+open(out, "wb").write(blob)
+PY
+install -m 644 "$ATH_DIR/board-2.bin" "$ATH_DIR/barbet/board-2.bin"
+
+# ath10k's firmware-5.bin is only a descriptor: this is a non-BMI design, the
+# WLAN firmware itself runs on the modem. This is the API-5 non-BMI stub.
+printf '%s' 'UUNBLUFUSDEwSwB3AQAAAAQAAACk5L5bAgAAAAMAAABAAAx3BQAAAAQAAAAEAAAABgAAAAQAAAADAAAA' |
+	base64 -d > "$ATH_DIR/firmware-5.bin"
+install -m 644 "$ATH_DIR/firmware-5.bin" "$ATH_DIR/barbet/firmware-5.bin"
+
+# Drop the earlier bring-up unit whose bind of ath10k raced the modem.
+if [ -e /etc/systemd/system/wcn-firmware.service ]; then
+	systemctl disable wcn-firmware.service 2>/dev/null || true
+	rm -f /etc/systemd/system/wcn-firmware.service
+fi
+
+install -m 755 "$HERE/barbet-wifi-start" /usr/local/bin/barbet-wifi-start
+install -m 644 "$HERE/tqftpserv.service" /etc/systemd/system/tqftpserv.service
+install -m 644 "$HERE/wcn3990-wifi.service" /etc/systemd/system/wcn3990-wifi.service
+install -d /etc/systemd/system/rmtfs.service.d
+install -m 644 "$HERE/rmtfs-enable.conf" /etc/systemd/system/rmtfs.service.d/10-barbet-enable.conf
+
+systemctl daemon-reload
+systemctl enable rmtfs.service tqftpserv.service wcn3990-wifi.service
+systemctl restart tqftpserv.service
+
+echo "provision: installed; reboot to start the modem and Wi-Fi"

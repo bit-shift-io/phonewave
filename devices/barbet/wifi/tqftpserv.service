@@ -1,0 +1,10 @@
+[Unit]
+Description=QRTR TFTP firmware server for the modem
+Before=wcn3990-wifi.service
+
+[Service]
+ExecStart=/usr/local/bin/tqftpserv
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
