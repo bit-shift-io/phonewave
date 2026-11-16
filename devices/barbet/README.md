@@ -114,3 +114,20 @@ flash-boot http://172.16.42.2:8000/boot.img <sha256>
 The USB network gives the workstation `172.16.42.2` and the phone
 `172.16.42.1`. The script must be present in the boot userspace; for the
 temporary Luma ramdisk it is installed under `/usr/bin`.
+
+## Installing the root from the boot userspace
+
+The published image (`https://packages.denialwm.org/images/`, the zip's
+`userdata.img`) can be written from the rescue the same way, with
+`image/flash-root`:
+
+```sh
+flash-root http://10.77.71.1:8000/userdata.img <sha256>
+```
+
+It writes the first of the `denial` and `userdata` partitions, as the early
+userspace picks its root, and compares the readback before deleting the
+image. A rescue with no installed root answers at `10.77.71.2`; the
+workstation needs `10.77.71.1/30` on the phone's USB network interface.
+`devices/barbet/boot/build-boot.sh` installs `flash-root` beside
+`flash-boot`.

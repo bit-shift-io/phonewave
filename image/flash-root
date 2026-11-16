@@ -1,0 +1,68 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+#
+# Write a Phonewave root image to the phone's root partition, then stop.
+# Meant for the boot userspace's rescue, where the USB network is up and the
+# published image can be fetched.
+#
+# Usage: flash-root URL SHA256 BYTES
+#
+# The image is streamed straight into the partition: a root image is several
+# gigabytes and the rescue has no disk to hold it. The readback is compared
+# with the published hash, so a truncated or corrupt download is caught even
+# though nothing was stored first.
+#
+# The partition is chosen the way the early userspace chooses its root:
+# `denial` first (a user who made one beside Android's data keeps Android's),
+# else `userdata`. It is found by its GPT partition name, never guessed, and
+# the image must fit. The phone is not rebooted, so a wrong or missing root is
+# not hidden by a restart.
+set -eu
+
+url=${1:?url}
+want=${2:?sha256}
+size=${3:?bytes}
+
+# The first of denial and userdata that exists, as the early userspace does.
+part= target=
+for name in denial userdata; do
+	for uevent in /sys/class/block/*/uevent; do
+		if grep -q "^PARTNAME=$name\$" "$uevent"; then
+			part=/dev/$(basename "$(dirname "$uevent")")
+			target=$name
+			break 2
+		fi
+	done
+done
+[ -n "$part" ] || {
+	echo "flash-root: no partition named denial or userdata" >&2
+	exit 1
+}
+
+sectors=$(cat "/sys/class/block/$(basename "$part")/size")
+available=$((sectors * 512))
+[ "$available" -ge "$size" ] || {
+	echo "flash-root: $target holds $available bytes, the image needs $size" >&2
+	exit 1
+}
+
+# The published image is an Android sparse image; only fastboot expands it.
+# Streaming it raw would put the sparse header where the filesystem should
+# be, and the early userspace would find no root. Convert it on the
+# workstation first (simg2img), then flash the raw file.
+if wget -O - "$url" | dd bs=4 count=1 2>/dev/null | od -An -tx1 | grep -q '3a fc 26 ed'; then
+	echo "flash-root: $url is an Android sparse image; convert it with simg2img and flash the raw file" >&2
+	exit 1
+fi
+
+echo "flash-root: writing $target ($part), $size bytes"
+wget -O - "$url" | dd of="$part" bs=1M conv=fsync
+sync
+
+got=$(dd if="$part" bs=1M | head -c "$size" | sha256sum | cut -d' ' -f1)
+[ "$got" = "$want" ] || {
+	echo "flash-root: readback hash $got, expected $want" >&2
+	exit 1
+}
+
+echo "flash-root: $target verified; restart to boot it"

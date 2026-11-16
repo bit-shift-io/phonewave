@@ -61,9 +61,9 @@ umask 022
 work=$(mktemp -d "${TMPDIR:-/tmp}/barbet-boot.XXXXXX")
 trap 'rm -rf "$work"' EXIT
 
-# The overlay: the shared early userspace and the from-phone boot writer. The
-# carrier's /bin/busybox runs /init through its shebang; nothing else is taken
-# from it.
+# The overlay: the shared early userspace, and the from-phone writers for the
+# boot image and the root. The carrier's /bin/busybox runs /init through its
+# shebang; nothing else is taken from it.
 #
 # Only files go in, never a directory entry: the carrier is merged-usr, so its
 # /bin is a symlink to usr/bin, and the kernel's initramfs extractor unlinks an
@@ -74,8 +74,10 @@ overlay=$work/overlay
 mkdir -p "$overlay/bin"
 install -m 0755 "$repo/image/initramfs/init" "$overlay/init"
 install -m 0755 "$here/flash-boot" "$overlay/bin/flash-boot"
+install -m 0755 "$repo/image/flash-root" "$overlay/bin/flash-root"
 entries='init
-bin/flash-boot'
+bin/flash-boot
+bin/flash-root'
 if [ -n "$rescue" ]; then
 	mkdir -p "$overlay/etc"
 	: >"$overlay/etc/stay-in-rescue"
