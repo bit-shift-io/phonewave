@@ -122,6 +122,7 @@ rescue() {
 	ip link set lo up
 	ip address add 10.77.71.2/30 dev "$ifname"
 	ip link set "$ifname" up
+	mark "rescue: network on ${ifname:-no interface}"
 	mkdir -p /etc/dropbear
 	dropbearmulti dropbear -R -E -p 10.77.71.2:22 -P /run/dropbear.pid
 	mark "rescue SSH on $ifname at 10.77.71.2 (rc=$?)"
