@@ -50,13 +50,21 @@ available=$((sectors * 512))
 # Streaming it raw would put the sparse header where the filesystem should
 # be, and the early userspace would find no root. Convert it on the
 # workstation first (simg2img), then flash the raw file.
-if wget -O - "$url" | dd bs=4 count=1 2>/dev/null | od -An -tx1 | grep -q '3a fc 26 ed'; then
+fetch() {
+	if command -v wget > /dev/null 2>&1; then
+		wget -O - "$url"
+	else
+		curl -fsSL "$url"
+	fi
+}
+
+if fetch | dd bs=4 count=1 2>/dev/null | od -An -tx1 | grep -q '3a fc 26 ed'; then
 	echo "flash-root: $url is an Android sparse image; convert it with simg2img and flash the raw file" >&2
 	exit 1
 fi
 
 echo "flash-root: writing $target ($part), $size bytes"
-wget -O - "$url" | dd of="$part" bs=1M conv=fsync
+fetch | dd of="$part" bs=1M conv=fsync
 sync
 
 got=$(dd if="$part" bs=1M | head -c "$size" | sha256sum | cut -d' ' -f1)

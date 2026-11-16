@@ -11,7 +11,11 @@ url=${1:?url}
 want=${2:?sha256}
 image=/tmp/boot.img
 
-wget -O "$image" "$url"
+if command -v wget > /dev/null 2>&1; then
+	wget -O "$image" "$url"
+else
+	curl -fsSL -o "$image" "$url"
+fi
 
 got=$(sha256sum "$image" | cut -d' ' -f1)
 [ "$got" = "$want" ] || {
