@@ -4,12 +4,15 @@
 
 The working boot_b image is the template: its header fields, ramdisk, DTB and
 AVB footer are kept, and only the kernel and the sizes that follow from it
-change. The output is a complete partition image. Nothing here reaches the
-phone; write the result yourself and keep the template.
+change. The kernel is LZ4-frame compressed and its arm64 text_offset adopts
+the template's value, both of which this bootloader requires. The output is a
+complete partition image. Nothing here reaches the phone; write the result
+yourself and keep the template.
 
 Usage: pack-boot.py TEMPLATE IMAGE RAMDISK OUTPUT [EVIDENCE]
 """
 import argparse
+import ctypes
 import hashlib
 import json
 import os
@@ -23,6 +26,9 @@ from pathlib import Path
 PAGE = 4096
 HEADER_SIZE = 1660
 AVB_FOOTER_SIZE = 64
+ARM64_IMAGE_MAGIC = b"ARM\x64"
+IMAGE_MAGIC_OFFSET = 0x38
+LZ4_FRAME_MAGIC = b"\x04\x22\x4d\x18"
 
 
 def die(message):
@@ -36,6 +42,93 @@ def sha(path):
 
 def align(size):
     return (size + PAGE - 1) & ~(PAGE - 1)
+
+
+class FrameInfo(ctypes.Structure):
+    _fields_ = [("blockSizeID", ctypes.c_int), ("blockMode", ctypes.c_int),
+                ("contentChecksumFlag", ctypes.c_int), ("frameType", ctypes.c_int),
+                ("contentSize", ctypes.c_ulonglong), ("dictID", ctypes.c_uint),
+                ("blockChecksumFlag", ctypes.c_int)]
+
+
+class Preferences(ctypes.Structure):
+    _fields_ = [("frameInfo", FrameInfo), ("compressionLevel", ctypes.c_int),
+                ("autoFlush", ctypes.c_uint), ("favorDecSpeed", ctypes.c_uint),
+                ("reserved", ctypes.c_uint * 3)]
+
+
+LZ4 = None
+
+
+def lz4():
+    global LZ4
+    if LZ4 is None:
+        try:
+            LZ4 = ctypes.CDLL("liblz4.so.1")
+        except OSError as error:
+            die(f"liblz4 is required to read and write the kernel payload: {error}")
+        LZ4.LZ4F_compressFrameBound.restype = ctypes.c_size_t
+        LZ4.LZ4F_compressFrameBound.argtypes = [ctypes.c_size_t,
+                                                ctypes.POINTER(Preferences)]
+        LZ4.LZ4F_compressFrame.restype = ctypes.c_size_t
+        LZ4.LZ4F_compressFrame.argtypes = [ctypes.c_void_p, ctypes.c_size_t,
+                                           ctypes.c_void_p, ctypes.c_size_t,
+                                           ctypes.POINTER(Preferences)]
+        LZ4.LZ4F_createDecompressionContext.restype = ctypes.c_size_t
+        LZ4.LZ4F_decompress.restype = ctypes.c_size_t
+        LZ4.LZ4F_freeDecompressionContext.restype = ctypes.c_size_t
+    return LZ4
+
+
+def frame_preferences(frame, path):
+    """The LZ4 frame settings the working template uses, so ours match."""
+    if frame[:4] != LZ4_FRAME_MAGIC:
+        die(f"{path}: the template kernel is not an LZ4 frame, so it cannot "
+            "be checked against this packer")
+    flags, descriptor = frame[4], frame[5]
+    if flags & 0x08:
+        die(f"{path}: the template LZ4 frame records its content size")
+    if flags & 0x01:
+        die(f"{path}: the template LZ4 frame uses a dictionary")
+    preferences = Preferences()
+    preferences.frameInfo.blockSizeID = (descriptor >> 4) & 0x7
+    preferences.frameInfo.blockMode = 1 if flags & 0x20 else 0
+    preferences.frameInfo.blockChecksumFlag = 1 if flags & 0x10 else 0
+    preferences.frameInfo.contentChecksumFlag = 1 if flags & 0x04 else 0
+    return preferences
+
+
+def lz4_decompress(data, path):
+    context = ctypes.c_void_p()
+    if lz4().LZ4F_createDecompressionContext(ctypes.byref(context), 100):
+        die(f"{path}: cannot create an LZ4 frame context")
+    out = bytearray()
+    position = 0
+    while position < len(data):
+        chunk = ctypes.create_string_buffer(1 << 20)
+        chunk_size = ctypes.c_size_t(len(chunk))
+        source_size = ctypes.c_size_t(len(data) - position)
+        result = lz4().LZ4F_decompress(context, chunk, ctypes.byref(chunk_size),
+                                       data[position:], ctypes.byref(source_size), None)
+        if result < 0:
+            die(f"{path}: the template kernel is not a valid LZ4 frame")
+        out += chunk.raw[:chunk_size.value]
+        position += source_size.value
+        if result == 0:
+            break
+    lz4().LZ4F_freeDecompressionContext(context)
+    return bytes(out)
+
+
+def lz4_compress(data, preferences, path):
+    bound = lz4().LZ4F_compressFrameBound(len(data), ctypes.byref(preferences))
+    out = ctypes.create_string_buffer(bound)
+    size = lz4().LZ4F_compressFrame(out, bound, data, len(data),
+                                    ctypes.byref(preferences))
+    if size <= 0:
+        die(f"{path}: LZ4 compression failed ({size})")
+    return out.raw[:size]
+
 
 
 def parse_template(path):
@@ -69,11 +162,21 @@ def parse_template(path):
     dtb_offset = ramdisk_offset + align(ramdisk_size)
     if dtb_offset + dtb_size > len(data):
         die(f"{path}: truncated, its DTB lies past the end of the image")
+    kernel_payload = data[PAGE:PAGE + kernel_size]
+    if len(kernel_payload) != kernel_size:
+        die(f"{path}: truncated, its kernel lies past the end of the image")
+    preferences = frame_preferences(kernel_payload, path)
+    kernel = lz4_decompress(kernel_payload, path)
+    if (len(kernel) < IMAGE_MAGIC_OFFSET + 4 or
+            kernel[IMAGE_MAGIC_OFFSET:IMAGE_MAGIC_OFFSET + 4] != ARM64_IMAGE_MAGIC):
+        die(f"{path}: the template kernel is not an arm64 Image")
 
     return {
         "data": data,
         "kernel_size": kernel_size,
         "kernel_addr": kernel_addr,
+        "kernel_text_offset": struct.unpack_from("<Q", kernel, 8)[0],
+        "kernel_preferences": preferences,
         "ramdisk_size": ramdisk_size,
         "ramdisk_addr": ramdisk_addr,
         "tags_addr": tags_addr,
@@ -84,6 +187,23 @@ def parse_template(path):
         "dtb": data[dtb_offset:dtb_offset + dtb_size],
         "ramdisk": data[ramdisk_offset:ramdisk_offset + ramdisk_size],
     }
+
+
+def prepare_kernel(path, template):
+    """Compress the Image the way the template does, and adopt its placement.
+
+    The bootloader rejects an Image whose text_offset field does not match the
+    address it places the kernel at. The working template records 0x80000, so
+    the packer applies the same value and changes no other Image byte.
+    """
+    raw = path.read_bytes()
+    if (len(raw) < IMAGE_MAGIC_OFFSET + 4 or
+            raw[IMAGE_MAGIC_OFFSET:IMAGE_MAGIC_OFFSET + 4] != ARM64_IMAGE_MAGIC):
+        die(f"{path}: not an arm64 Image")
+    text_offset = struct.unpack_from("<Q", raw, 8)[0]
+    patched = bytearray(raw)
+    struct.pack_into("<Q", patched, 8, template["kernel_text_offset"])
+    return lz4_compress(bytes(patched), template["kernel_preferences"], path), text_offset
 
 
 def parse_avb(data):
@@ -131,13 +251,13 @@ def parse_avb(data):
     die("the template has no AVB hash descriptor for the boot partition")
 
 
-def make_payload(template, image, ramdisk, work):
+def make_payload(template, kernel, ramdisk, work):
     dtb = work / "template.dtb"
     dtb.write_bytes(template["dtb"])
     payload = work / "payload.img"
     argv = [
         "mkbootimg",
-        "--kernel", str(image),
+        "--kernel", str(kernel),
         "--ramdisk", str(ramdisk),
         "--dtb", str(dtb),
         "--header_version", "2",
@@ -206,10 +326,11 @@ def main():
     template = parse_template(args.template)
     avb = parse_avb(template["data"])
     partition_size = len(template["data"])
+    frame, image_text_offset = prepare_kernel(args.image, template)
 
     # mkbootimg and avbtool add a page-aligned DTB after the ramdisk; the AVB
     # footer and its 512-byte vbmeta blob cannot overlap the payload.
-    payload_size = (PAGE + align(args.image.stat().st_size) +
+    payload_size = (PAGE + align(len(frame)) +
                     align(args.ramdisk.stat().st_size) +
                     align(len(template["dtb"])))
     if payload_size + AVB_FOOTER_SIZE + 512 > partition_size:
@@ -219,7 +340,9 @@ def main():
     args.output.parent.mkdir(parents=True, exist_ok=True)
     work = Path(tempfile.mkdtemp(prefix="barbet-pack-", dir=args.output.parent))
     try:
-        payload = make_payload(template, args.image, args.ramdisk, work)
+        kernel = work / "kernel.lz4"
+        kernel.write_bytes(frame)
+        payload = make_payload(template, kernel, args.ramdisk, work)
         add_footer(payload, avb, partition_size)
         try:
             os.link(payload, args.output)
@@ -228,9 +351,19 @@ def main():
     finally:
         shutil.rmtree(work)
 
+    with open(args.output, "rb") as image:
+        image.seek(-AVB_FOOTER_SIZE, os.SEEK_END)
+        footer = image.read(AVB_FOOTER_SIZE)
+    if footer[:4] != b"AVBf":
+        die(f"{args.output}: the packed image has no AVB footer")
+    output_original_size = struct.unpack_from(">Q", footer, 12)[0]
+
     record = {
-        "template": {"sha256": sha(args.template), "bytes": args.template.stat().st_size},
-        "kernel": {"sha256": sha(args.image), "bytes": args.image.stat().st_size},
+        "template": {"sha256": sha(args.template), "bytes": args.template.stat().st_size},        "kernel": {"sha256": sha(args.image), "bytes": args.image.stat().st_size,
+                   "text_offset": image_text_offset,
+                   "patched_text_offset": template["kernel_text_offset"]},
+        "kernel_payload": {"sha256": hashlib.sha256(frame).hexdigest(),
+                           "bytes": len(frame)},
         "ramdisk": {"sha256": sha(args.ramdisk), "bytes": args.ramdisk.stat().st_size},
         "dtb": {"sha256": hashlib.sha256(template["dtb"]).hexdigest(),
                 "bytes": len(template["dtb"])},
@@ -245,7 +378,7 @@ def main():
             "dtb_addr": hex(template["dtb_addr"]),
         },
         "avb": {
-            "original_size": avb["original_size"],
+            "original_size": output_original_size,
             "rollback_index": avb["rollback_index"],
             "rollback_index_location": avb["rollback_index_location"],
             "salt": avb["salt"],

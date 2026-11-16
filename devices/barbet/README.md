@@ -27,17 +27,25 @@ algorithm NONE, the template's salt and rollback index 1783209600. The
 packer refuses to replace an existing output and never runs a phone command;
 writing the image is a separate, explicit step.
 
+The bootloader requires two things of the kernel payload, both taken from
+the working template: the Image is LZ4-frame compressed, and its arm64
+`text_offset` field is set to the template's 0x80000 instead of the 0 the
+build writes. Only those eight header bytes differ; the packer changes no
+other Image byte. A raw or differently placed Image is rejected by ABL before
+the kernel runs, with `kernel compression not supported` or
+`Kernel TextOffset does not match`.
+
 The v2 `kernel_addr` field (0x8000) is kept as the template has it. The
-bootloader ignores it on arm64 and places the Image itself, so the packer
-does not change the Image bytes or claim an address for them.
+bootloader ignores it on arm64 and places the Image itself.
 
 Verify before writing:
 
 ```sh
 unpack_bootimg --boot_img OUTPUT --out DIR
-sha256sum DIR/kernel artifacts/Image DIR/ramdisk
 avbtool info_image --image OUTPUT
 avbtool verify_image --image OUTPUT
+# DIR/kernel is the LZ4 frame; decompress it and compare with the release
+# Image after setting its text_offset field to 0x80000.
 ```
 
 Host tests: `python3 devices/barbet/boot/test-pack-boot.py`.
