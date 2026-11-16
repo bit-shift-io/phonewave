@@ -140,3 +140,13 @@ holds the one-time `provision` script (modem, WLAN and board firmware from the
 phone's own stock partitions, the `rmtfs`/`tqftpserv` units and the start
 ordering) and the reason `ath10k` must not be rebound after the modem starts.
 See `devices/barbet/wifi/README.md`.
+
+## Audio
+
+The speaker path (TAS2562 pair on QUIN TDM RX) is verified with an audible
+tone. The ADSP has to run for the `q6afecc` clock the sound card needs, and it
+must start only after Wi-Fi has finished booting the WLAN firmware.
+`devices/barbet/audio/` provisions the ADSP image, the RT5514P DSP blobs, the
+`barbet-audio.service` unit and the verified mixer route; see
+`devices/barbet/audio/README.md`. Microphone capture is mono and still
+partial: the DSP loads, but the samples carry a DC offset.

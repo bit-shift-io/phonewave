@@ -1,0 +1,13 @@
+[Unit]
+Description=Barbet ADSP and built-in audio route
+After=wcn3990-wifi.service local-fs.target
+Wants=wcn3990-wifi.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+TimeoutStartSec=90
+ExecStart=/usr/local/bin/barbet-audio-start
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,62 @@
+#!/bin/sh
+# Install the Barbet audio firmware and the route service into the running
+# system. Run as root on the phone; idempotent. Reboot afterwards.
+#
+# The ADSP image and the RT5514P DSP blobs are the phone's own stock files:
+#   firmware/adsp.mdt, firmware/adsp.b*      -> ADSP remoteproc firmware
+#   firmware/rt5514p_dsp_fw{1..4}.bin        -> requested by bare name
+# VENDOR_DIR may point at an already-mounted stock vendor tree instead of
+# VENDOR_IMG.
+set -eu
+
+FW_DIR=/usr/lib/firmware/qcom/sm7250/google/barbet
+VENDOR_IMG=${VENDOR_IMG:-/var/tmp/super/vendor_a.img}
+HERE=$(cd "$(dirname "$0")" && pwd)
+
+die() { echo "provision: $*" >&2; exit 1; }
+
+vendor_dir=${VENDOR_DIR:-}
+mounted_vendor=
+if [ -z "$vendor_dir" ]; then
+	[ -f "$VENDOR_IMG" ] ||
+		die "no vendor firmware: set VENDOR_DIR, or VENDOR_IMG to a vendor_a.img (lpunpack -p vendor_a $VENDOR_IMG /dev/disk/by-partlabel/super)"
+	mkdir -p /run/barbet-vendor
+	if ! mountpoint -q /run/barbet-vendor; then
+		mount -t ext4 -o ro "$VENDOR_IMG" /run/barbet-vendor ||
+			die "cannot mount $VENDOR_IMG"
+		mounted_vendor=1
+	fi
+	vendor_dir=/run/barbet-vendor
+fi
+vf=$vendor_dir/firmware
+[ -s "$vf/adsp.mdt" ] || die "$vf/adsp.mdt is missing"
+for n in 1 2 3 4; do
+	[ -s "$vf/rt5514p_dsp_fw$n.bin" ] ||
+		die "$vf/rt5514p_dsp_fw$n.bin is missing"
+done
+
+install -d "$FW_DIR"
+install -m 644 "$vf/adsp.mdt" "$FW_DIR"/
+for f in "$vf"/adsp.b*; do
+	install -m 644 "$f" "$FW_DIR"/
+done
+for n in 1 2 3 4; do
+	install -m 644 "$vf/rt5514p_dsp_fw$n.bin" /usr/lib/firmware/
+done
+
+install -m 755 "$HERE/barbet-audio-start" /usr/local/bin/barbet-audio-start
+install -m 644 "$HERE/barbet-audio.service" /etc/systemd/system/barbet-audio.service
+
+# The route owns the mixer state; ALSA restore must not overwrite it.
+for unit in alsa-state.service alsa-restore.service; do
+	ln -sf /dev/null "/etc/systemd/system/$unit"
+done
+
+systemctl daemon-reload
+systemctl enable barbet-audio.service
+
+if [ -n "$mounted_vendor" ]; then
+	umount /run/barbet-vendor
+fi
+
+echo "provision: installed; reboot to start the ADSP and apply the route"

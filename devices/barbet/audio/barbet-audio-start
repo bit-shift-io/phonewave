@@ -1,0 +1,38 @@
+#!/bin/sh
+# Barbet audio bring-up: start the ADSP and apply the one verified route.
+#
+# The ADSP provides the AFE/q6afe clock controller the machine driver needs
+# (lpass_audio_hw_vote). It must start after Wi-Fi: the modem boots the WLAN
+# firmware while the ADSP is offline, and starting the ADSP during that boot
+# makes the modem's WLAN process die. wcn3990-wifi.service waits for WLFW, so
+# ordering after it is enough.
+set -eu
+
+systemctl start wcn3990-wifi.service 2>/dev/null || true
+
+for r in /sys/class/remoteproc/remoteproc*; do
+	[ -e "$r/name" ] || continue
+	[ "$(cat "$r/name")" = adsp ] || continue
+	[ "$(cat "$r/state")" = running ] || echo start > "$r/state"
+done
+
+i=0
+while [ ! -e /dev/snd/controlC0 ]; do
+	i=$((i + 1))
+	[ "$i" -lt 600 ] || { echo "sound card did not appear" >&2; exit 1; }
+	sleep 0.1
+done
+
+# Playback: MultiMedia2 -> QUIN TDM RX -> the TAS2562 pair.
+amixer -c 0 sset 'QUIN_TDM_RX_0 Audio Mixer MultiMedia2' on
+amixer -c 0 sset 'ASI1 Sel' Left
+amixer -c 0 sset 'Amp Gain' 16
+amixer -c 0 sset 'Digital Volume Control' 90
+
+# Capture: MultiMedia1 -> PRI TDM TX -> RT5514P (mono, slot 0).
+amixer -c 0 sset 'MultiMedia1 Mixer PRIMARY_TDM_TX_0' on
+amixer -c 0 sset 'Stereo1 DMIC Mux' DMIC1
+amixer -c 0 sset 'Sto1 ADC MIXL DMIC' on
+amixer -c 0 sset 'ADC1' 23
+
+echo "audio card ready"
