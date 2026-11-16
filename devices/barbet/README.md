@@ -12,8 +12,40 @@ Private inputs live in the vault,
 `${PHONEWAVE_VAULT:-/mnt/development/denial-os/device-vault}/barbet`:
 `backups/boot_b.img` is the verified working image whose header, ramdisk, DTB
 and AVB properties are the template, and `boot/` holds the retained ramdisk
-and the packed images. The ramdisk is the Luma one only for the kernel
-baseline; the boot userspace comes from the shared image later.
+and the packed images. The retained ramdisk is the Luma one only as a
+carrier: it supplies `/bin/busybox` and its loader, and the Phonewave boot
+userspace is layered on top of it.
+
+### Building the image
+
+`build-boot.sh` builds the ramdisk and the image in one step: it appends the
+shared early userspace (`image/initramfs/`) and `flash-boot` to the carrier
+ramdisk as one more gzip member, then calls `pack-boot.py`. The kernel unpacks
+concatenated gzip members in order and a later entry replaces an earlier one,
+so only `/init` changes and nothing from the carrier is rebuilt.
+
+```sh
+devices/barbet/boot/build-boot.sh OUTPUT --kernel IMAGE --dtb DTB
+                                [--template BOOT_IMG] [--ramdisk CARRIER.gz]
+                                [--rescue] [--append-cmdline WORDS]
+                                [--evidence FILE]
+```
+
+`--template` and `--ramdisk` default to the vault paths above. `--rescue`
+adds `/etc/stay-in-rescue` to the overlay, so the image always stops in the
+rescue; that is for bring-up only. The script refuses a carrier without the
+expected overlay entries and checks that the packed ramdisk is the one it
+built.
+
+The overlay holds files only, never a directory entry. The carrier is
+merged-usr, so its `/bin` is a symlink to `usr/bin`; the kernel's initramfs
+extractor unlinks an entry whose type differs from what is already there, so a
+`bin` directory entry would remove the symlink, leave `/bin/busybox` missing
+and make `/init` fail with `Failed to execute /init (error -2)`. A file named
+under the symlink is extracted into `usr/bin`, which is what
+`bin/flash-boot` does.
+
+The low-level packer can also be run directly:
 
 ```sh
 devices/barbet/boot/pack-boot.py TEMPLATE IMAGE RAMDISK OUTPUT [EVIDENCE]
