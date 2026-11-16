@@ -313,6 +313,8 @@ def main():
     parser.add_argument("evidence", type=Path, nargs="?")
     parser.add_argument("--dtb", type=Path,
                         help="device tree to pack instead of the template's")
+    parser.add_argument("--append-cmdline",
+                        help="words to append to the template command line")
     args = parser.parse_args()
 
     if args.output.exists():
@@ -331,6 +333,11 @@ def main():
             die(f"{args.dtb}: not an FDT")
 
     template = parse_template(args.template)
+    if args.append_cmdline:
+        template["cmdline"] = f'{template["cmdline"]} {args.append_cmdline}'.strip()
+        if len(template["cmdline"]) >= 512:
+            die(f"command line does not fit in 512 bytes: "
+                f"{len(template['cmdline'])}")
     avb = parse_avb(template["data"])
     partition_size = len(template["data"])
     dtb = args.dtb.read_bytes() if args.dtb else template["dtb"]

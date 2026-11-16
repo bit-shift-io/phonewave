@@ -16,7 +16,8 @@ and the packed images. The ramdisk is the Luma one only for the kernel
 baseline; the boot userspace comes from the shared image later.
 
 ```sh
-devices/barbet/boot/pack-boot.py TEMPLATE IMAGE RAMDISK OUTPUT [EVIDENCE] [--dtb DTB]
+devices/barbet/boot/pack-boot.py TEMPLATE IMAGE RAMDISK OUTPUT [EVIDENCE]
+                                   [--dtb DTB] [--append-cmdline WORDS]
 ```
 
 `IMAGE` is a linux-perpetua release's `artifacts/Image`; `RAMDISK` is the
@@ -26,6 +27,9 @@ line and DTB, the new kernel, the given ramdisk, and an AVB footer with
 algorithm NONE, the template's salt and rollback index 1783209600. The
 packer refuses to replace an existing output and never runs a phone command;
 writing the image is a separate, explicit step.
+
+`--append-cmdline` adds words to the template command line, for example a
+bring-up flag; it refuses a line that no longer fits the 512-byte field.
 
 By default the template's DTB is kept. `--dtb` packs another tree, such as
 the one linux-perpetua builds: that tree is the one ABL passes to the kernel,

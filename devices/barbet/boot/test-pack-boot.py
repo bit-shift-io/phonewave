@@ -161,7 +161,7 @@ class PackBootTest(unittest.TestCase):
             make_template(self.tmp)
 
     def pack(self, template=None, image=None, ramdisk=None, output=None,
-             evidence=None, dtb=None, env=None):
+             evidence=None, dtb=None, append_cmdline=None, env=None):
         template = template or self.template
         image = image or self.tmp / "Image"
         ramdisk = ramdisk or self.tmp / "ramdisk"
@@ -175,6 +175,8 @@ class PackBootTest(unittest.TestCase):
             argv.append(str(evidence))
         if dtb:
             argv += ["--dtb", str(dtb)]
+        if append_cmdline:
+            argv += ["--append-cmdline", append_cmdline]
         return run(argv, env=env)
 
     def test_packs_the_compressed_kernel_over_the_template_payload(self):
@@ -243,6 +245,20 @@ class PackBootTest(unittest.TestCase):
         record = json.loads(evidence.read_text())
         self.assertEqual(record["dtb"]["sha256"], hashlib.sha256(dtb).hexdigest())
         self.assertEqual(record["dtb"]["source"], "supplied")
+
+    def test_appends_words_to_the_template_command_line(self):
+        result = self.pack(append_cmdline="clk_ignore_unused pd_ignore_unused")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        output = self.tmp / "boot.img"
+        cmdline = output.read_bytes()[64:576].split(b"\0")[0].decode()
+        self.assertEqual(cmdline,
+                         CMDLINE + " clk_ignore_unused pd_ignore_unused")
+
+    def test_rejects_a_command_line_that_does_not_fit(self):
+        result = self.pack(append_cmdline="x" * 500)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("command line", result.stderr)
+        self.assertFalse((self.tmp / "boot.img").exists())
 
     def test_rejects_a_supplied_file_that_is_not_a_dtb(self):
         supplied = self.tmp / "not.dtb"
