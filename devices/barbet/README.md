@@ -150,3 +150,11 @@ must start only after Wi-Fi has finished booting the WLAN firmware.
 `barbet-audio.service` unit and the verified mixer route; see
 `devices/barbet/audio/README.md`. Microphone capture is mono and still
 partial: the DSP loads, but the samples carry a DC offset.
+
+## Bluetooth
+
+The WCN3990 BT side works. The modem powers the combo chip while booting the
+WLAN firmware, so `barbet-bt.service` rebinds the BT serdev after
+`wcn3990-wifi.service` and starts bluetoothd. The kernel disables the QCA
+in-band-sleep handshake and keeps the public address the firmware reports.
+See `devices/barbet/bt/README.md`.

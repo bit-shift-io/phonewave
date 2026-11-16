@@ -1,0 +1,13 @@
+[Unit]
+Description=Bring up the WCN3990 Bluetooth after the WLAN powers the combo
+After=wcn3990-wifi.service bluetooth.service
+Wants=wcn3990-wifi.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+TimeoutStartSec=120
+ExecStart=/usr/local/bin/barbet-bt-start
+
+[Install]
+WantedBy=multi-user.target

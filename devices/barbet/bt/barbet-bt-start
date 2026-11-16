@@ -1,0 +1,32 @@
+#!/bin/sh
+# Bring up the WCN3990 Bluetooth side after the modem has powered the combo
+# chip. The BT ROM is unresponsive until the WLAN firmware is running, so the
+# serdev has to be rebound after wcn3990-wifi.service; rebinding runs the QCA
+# setup again at the point where the chip is actually powered.
+set -eu
+
+systemctl stop bluetooth 2>/dev/null || true
+
+for d in /sys/bus/serial/devices/*; do
+	[ -e "$d/driver" ] || continue
+	[ "$(basename "$(readlink -f "$d/driver")")" = hci_uart_qca ] || continue
+	name=$(basename "$d")
+	echo "$name" > /sys/bus/serial/drivers/hci_uart_qca/unbind
+	i=0
+	while [ -e /sys/class/bluetooth/hci0 ]; do
+		i=$((i + 1))
+		[ "$i" -lt 50 ] || break
+		sleep 0.2
+	done
+	sleep 1
+	echo "$name" > /sys/bus/serial/drivers/hci_uart_qca/bind
+done
+
+i=0
+while ! ls /sys/class/bluetooth/hci* >/dev/null 2>&1; do
+	i=$((i + 1))
+	[ "$i" -lt 100 ] || { echo "Bluetooth controller did not appear" >&2; exit 1; }
+	sleep 0.1
+done
+sleep 2
+systemctl start bluetooth

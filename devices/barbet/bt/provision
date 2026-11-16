@@ -1,0 +1,44 @@
+#!/bin/sh
+# Install the WCN3990/WCN3991 Bluetooth patch/NVM and the bring-up service.
+# Run as root on the phone; idempotent.
+#
+# The chip only powers up after the modem has booted the WLAN firmware, so
+# barbet-bt.service rebinds the serdev after wcn3990-wifi.service instead of
+# relying on the boot-time probe.
+set -eu
+
+QCA_DIR=/usr/lib/firmware/qca
+VENDOR_IMG=${VENDOR_IMG:-/var/tmp/super/vendor_a.img}
+HERE=$(cd "$(dirname "$0")" && pwd)
+
+die() { echo "provision: $*" >&2; exit 1; }
+
+vendor_dir=${VENDOR_DIR:-}
+mounted_vendor=
+if [ -z "$vendor_dir" ]; then
+	[ -f "$VENDOR_IMG" ] ||
+		die "no vendor firmware: set VENDOR_DIR, or VENDOR_IMG to a vendor_a.img (lpunpack -p vendor_a $VENDOR_IMG /dev/disk/by-partlabel/super)"
+	mkdir -p /run/barbet-vendor
+	if ! mountpoint -q /run/barbet-vendor; then
+		mount -t ext4 -o ro "$VENDOR_IMG" /run/barbet-vendor ||
+			die "cannot mount $VENDOR_IMG"
+		mounted_vendor=1
+	fi
+	vendor_dir=/run/barbet-vendor
+fi
+vf=$vendor_dir/firmware
+for f in crbtfw32.tlv crnv32.bin crnv32u.bin; do
+	[ -s "$vf/$f" ] || die "$vf/$f is missing"
+	install -m 644 "$vf/$f" "$QCA_DIR/"
+done
+
+install -m 755 "$HERE/barbet-bt-start" /usr/local/bin/barbet-bt-start
+install -m 644 "$HERE/barbet-bt.service" /etc/systemd/system/barbet-bt.service
+systemctl daemon-reload
+systemctl enable barbet-bt.service
+
+if [ -n "$mounted_vendor" ]; then
+	umount /run/barbet-vendor
+fi
+
+echo "provision: Bluetooth firmware and bring-up service installed"
