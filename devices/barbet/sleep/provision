@@ -1,0 +1,14 @@
+#!/bin/sh
+# Install the Denial idle-suspend watchdog. Run as root on the phone;
+# idempotent. Denial's own settings decide whether it suspends at all.
+set -eu
+
+HERE=$(cd "$(dirname "$0")" && pwd)
+
+install -m 755 "$HERE/denial-idle-suspend" /usr/local/sbin/denial-idle-suspend
+install -m 644 "$HERE/denial-idle-suspend.service" /etc/systemd/system/
+install -m 644 "$HERE/denial-idle-suspend.timer" /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now denial-idle-suspend.timer
+
+echo "provision: Denial idle-suspend watchdog installed"

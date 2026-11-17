@@ -1,0 +1,8 @@
+[Unit]
+Description=Suspend while the Denial session stays dark
+After=denial.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/denial-idle-suspend
+Nice=10

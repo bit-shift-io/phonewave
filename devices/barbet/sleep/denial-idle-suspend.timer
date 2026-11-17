@@ -1,0 +1,11 @@
+[Unit]
+Description=Re-arm Denial automatic suspend after an alarm wake
+
+[Timer]
+OnBootSec=90s
+OnUnitActiveSec=15s
+AccuracySec=1s
+Unit=denial-idle-suspend.service
+
+[Install]
+WantedBy=timers.target

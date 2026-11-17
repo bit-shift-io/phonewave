@@ -1,0 +1,91 @@
+#!/bin/sh
+# Suspend the phone when Denial's automatic suspend is enabled and every
+# connected display has stayed dark for the configured idle timeout.
+#
+# Denial's compositor suspends once per idle interval, but only physical
+# input resets that interval. A wake from an RTC alarm (an Android job, an
+# alarm clock) therefore leaves the phone awake with its screen off until
+# somebody touches it. This watchdog re-arms the same policy after such a
+# wake. It reads Denial's own setting, so disabling automatic suspend in the
+# shell disables this too.
+#
+# The state file holds "<epoch the displays went dark> <boottime of the last
+# check>". Boottime includes time spent suspended, so a jump much larger than
+# the timer interval means the phone slept in between and deserves a fresh
+# interval.
+
+STATE=/run/denial-idle-suspend.state
+SETTINGS=/home/bronson/.config/denial/settings.json
+# How far the timer may slip before we assume the phone was asleep. The timer
+# runs every 15s, so a normal gap is well under this.
+SLEEP_GAP=45
+
+field() {
+	python3 - "$SETTINGS" "$1" 2>/dev/null <<'PY'
+import json, sys
+try:
+    document = json.load(open(sys.argv[1]))
+except Exception:
+    raise SystemExit
+power = document.get("power") or {}
+value = power.get(sys.argv[2])
+if value is True:
+    print(1)
+elif value is False:
+    print(0)
+elif isinstance(value, int):
+    print(value)
+PY
+}
+
+[ "$(field idleSuspendEnabled)" = 1 ] || { rm -f "$STATE"; exit 0; }
+
+timeout=$(field idleSuspendTimeoutSeconds)
+case "$timeout" in ''|*[!0-9]*) timeout=120 ;; esac
+[ "$timeout" -ge 30 ] || timeout=30
+
+# Only a connected display can be lit; the writeback connector reports On
+# while it is not a real output.
+lit=0
+for connector in /sys/class/drm/card*-*; do
+	[ -e "$connector/dpms" ] || continue
+	[ "$(cat "$connector/status" 2>/dev/null)" = connected ] || continue
+	[ "$(cat "$connector/dpms" 2>/dev/null)" = On ] && lit=1
+done
+[ "$lit" = 0 ] || { rm -f "$STATE"; exit 0; }
+
+now=$(date +%s)
+boot=$(cut -d' ' -f1 /proc/uptime)
+
+since=
+previous_boot=
+if [ -f "$STATE" ]; then
+	read -r since previous_boot < "$STATE" || since=
+fi
+
+# The phone slept (or stalled) since the last check: start a fresh interval
+# so an alarm wake does not bounce straight back into suspend.
+if [ -n "${since:-}" ] && [ -n "${previous_boot:-}" ] &&
+	awk -v now="$boot" -v then="$previous_boot" \
+		'BEGIN { exit !(now - then > '"$SLEEP_GAP"') }'; then
+	since=
+fi
+
+# A clock step backwards invalidates the stored epoch.
+if [ -n "${since:-}" ] && [ "$now" -lt "$since" ]; then
+	since=
+fi
+
+if [ -z "${since:-}" ]; then
+	echo "$now $boot" > "$STATE"
+	exit 0
+fi
+
+echo "$since $boot" > "$STATE"
+
+elapsed=$((now - since))
+if [ "$elapsed" -ge "$timeout" ]; then
+	rm -f "$STATE"
+	logger -t denial-idle-suspend "every display dark for ${elapsed}s; suspending"
+	systemctl suspend
+fi

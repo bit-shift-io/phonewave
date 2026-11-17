@@ -158,3 +158,11 @@ WLAN firmware, so `barbet-bt.service` rebinds the BT serdev after
 `wcn3990-wifi.service` and starts bluetoothd. The kernel disables the QCA
 in-band-sleep handshake and keeps the public address the firmware reports.
 See `devices/barbet/bt/README.md`.
+
+## Sleep
+
+Denial's `idleSuspendEnabled`/`idleSuspendTimeoutSeconds` are the policy. The
+compositor suspends once per idle interval, and an RTC-alarm wake does not
+count as input, so `devices/barbet/sleep/` adds a 15 s watchdog that re-arms
+the same policy after such a wake. It reads the user's Denial settings and
+does nothing when automatic suspend is off. See `devices/barbet/sleep/README.md`.
