@@ -1,0 +1,11 @@
+[Unit]
+Description=Repeat the Android health HAL check after cell starts
+
+[Timer]
+OnBootSec=60s
+OnUnitActiveSec=30s
+AccuracySec=2s
+Unit=droidloom-health-quiet.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,14 @@
+#!/bin/sh
+# Install the Droidloom health-HAL quiescer. Run as root on the phone;
+# idempotent. It only acts while an Android cell is running.
+set -eu
+
+HERE=$(cd "$(dirname "$0")" && pwd)
+
+install -m 755 "$HERE/droidloom-health-quiet" /usr/local/sbin/droidloom-health-quiet
+install -m 644 "$HERE/droidloom-health-quiet.service" /etc/systemd/system/
+install -m 644 "$HERE/droidloom-health-quiet.timer" /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now droidloom-health-quiet.timer
+
+echo "provision: Droidloom health-HAL quiescer installed"

@@ -1,0 +1,7 @@
+[Unit]
+Description=Keep the example Android health HAL stopped
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/droidloom-health-quiet
+Nice=10

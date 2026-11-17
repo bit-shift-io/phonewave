@@ -166,3 +166,11 @@ compositor suspends once per idle interval, and an RTC-alarm wake does not
 count as input, so `devices/barbet/sleep/` adds a 15 s watchdog that re-arms
 the same policy after such a wake. It reads the user's Denial settings and
 does nothing when automatic suspend is off. See `devices/barbet/sleep/README.md`.
+
+## Droidloom cell
+
+The pinned Android image's example health HAL polls the battery through a
+`CLOCK_BOOTTIME_ALARM` timer every ~38 s and wakes the phone. The cell keeps
+reporting its last battery value, so `devices/barbet/droidloom/` stops
+`vendor.health-default` again after each cell start. See
+`devices/barbet/droidloom/README.md`.

@@ -1,0 +1,18 @@
+#!/bin/sh
+# Droidloom's pinned Android image runs the AOSP example health HAL
+# (android.hardware.health-service.example). It polls the battery through a
+# CLOCK_BOOTTIME_ALARM timerfd every ~38s, which wakes the phone out of
+# s2idle. The cell keeps reporting the last battery state it received, so
+# stopping the service is enough. Android init starts it again with the next
+# cell start, which is why this runs from a timer rather than once.
+
+init=$(pgrep -x init | head -1)
+[ -n "$init" ] || exit 0
+
+state=$(nsenter -t "$init" -m -p -i -u -n -r \
+	/system/bin/getprop init.svc.vendor.health-default 2>/dev/null)
+[ "$state" = running ] || exit 0
+
+nsenter -t "$init" -m -p -i -u -n -r \
+	/system/bin/stop vendor.health-default 2>/dev/null
+logger -t droidloom-health-quiet "stopped vendor.health-default in the Android cell"
